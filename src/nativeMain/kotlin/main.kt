@@ -8,9 +8,10 @@ import platform.posix.*
 
 class ArgParserAndArgsAndOpts (
     val parser: ArgParser,
-    val ksheetOpt: SingleOption<String, DefaultRequiredType.Required>,
-    val listOpt: SingleNullableOption<Boolean>,
-    val versionOpt: SingleNullableOption<Boolean>,
+    val ksheetOpt: SingleOption<String, DefaultRequiredType.Default>,
+    val listOpt: SingleOption<Boolean, DefaultRequiredType.Default>,
+    val quietOpt: SingleOption<Boolean, DefaultRequiredType.Default>,
+    val versionOpt: SingleOption<Boolean, DefaultRequiredType.Default>,
     val subjectArg: SingleNullableArgument<String>,
     val sectionArg: SingleNullableArgument<String>
 )
@@ -19,27 +20,34 @@ fun main(args: Array<String>) {
     val parserAndAll = getArgParser()
     parserAndAll.parser.parse(args)
 
-    val ksheetFile = fopen(parserAndAll.ksheetOpt.value, "r")
-    if (ksheetFile == null) {
-        perror("Unable to open ${parserAndAll.ksheetOpt.value}")
-        return
-    }
+    val ksheetFile = openKSheetFile(parserAndAll.ksheetOpt.value)
 
     try {
         val content: List<String>? = when {
-            parserAndAll.versionOpt.value == true -> getVersion()
-            parserAndAll.listOpt.value == true -> findEntries(ksheetFile)
+            parserAndAll.versionOpt.value -> getVersion()
+            ksheetFile == null -> {
+                perror("Unable to open ${parserAndAll.ksheetOpt.value}")
+                return
+            }
+            parserAndAll.listOpt.value -> findEntries(ksheetFile)
             parserAndAll.subjectArg.value != null && parserAndAll.sectionArg.value != null -> findEntry(ksheetFile, parserAndAll.subjectArg.value!!, parserAndAll.sectionArg.value!!)
             else -> null
         }
 
         if (content == null) {
             getArgParser().parser.parse(arrayOf("help"))
-        } else {
+        } else if (!parserAndAll.quietOpt.value) {
             printContent(content)
         }
     } finally {
-        fclose(ksheetFile)
+        if (ksheetFile != null) fclose(ksheetFile)
+    }
+}
+
+fun openKSheetFile(ksheetFilePath: String): CPointer<FILE>? {
+    return when(val ksheetFile = fopen(ksheetFilePath, "r")) {
+        null -> fopen(ksheetFilePath, "a+")
+        else -> ksheetFile
     }
 }
 
@@ -100,12 +108,21 @@ fun getArgParser(): ArgParserAndArgsAndOpts {
     val parser = ArgParser("ksheet")
     return ArgParserAndArgsAndOpts(
         parser,
-        parser.option(ArgType.String, shortName = "f", fullName = "file", description = "Cheat sheet Mardown file").required(),
-        parser.option(ArgType.Boolean, shortName = "l", fullName = "list", description = "Show all possible entries"),
-        parser.option(ArgType.Boolean, shortName = "v", fullName = "version", description = "Display version"),
+        parser.option(ArgType.String, shortName = "f", fullName = "file", description = "Cheat sheet Mardown file").default(
+            getDefaultKSheetFile()),
+        parser.option(ArgType.Boolean, shortName = "l", fullName = "list", description = "Show all possible entries").default(false),
+        parser.option(ArgType.Boolean, shortName = "q", fullName = "quiet", description = "No output").default(false),
+        parser.option(ArgType.Boolean, shortName = "v", fullName = "version", description = "Display version").default(false),
         parser.argument(ArgType.String, fullName = "subject", description = "Subject (heading 2) to return").optional(),
         parser.argument(ArgType.String, fullName = "section", description = "Section (heading 3) to return").optional()
     )
+}
+
+fun getDefaultKSheetFile():String {
+    return when (Platform.osFamily) {
+        OsFamily.WINDOWS -> "${getenv("USERPROFILE")?.toKString()}\\csheet.md"
+        else -> "${getenv("HOME")?.toKString()}/csheet.md"
+    }
 }
 
 fun getVersion(): List<String> {
